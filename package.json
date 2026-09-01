@@ -1,0 +1,10 @@
+{
+  "name": "dsh-recovery",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "P0 CLI for DeepSeek Harness self-recovery: scan / snapshot / rollback / safemode / boot-probe / doctor. Pure Node, zero runtime dependencies.",
+  "bin": { "dsh-recovery": "./bin/dsh-recovery.mjs" },
+  "engines": { "node": ">=20.16" },
+  "scripts": { "test": "node --test" }
+}
