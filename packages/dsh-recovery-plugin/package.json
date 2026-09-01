@@ -1,0 +1,22 @@
+{
+  "name": "dsh-recovery-plugin",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "P2 in-process watchdog for dsh-recovery: fiber-failure quarantine, heartbeat, render probe, preset quarantine + default fallback, intent/bundle reconcile, pre-install snapshot guard, settings status card.",
+  "exports": {
+    ".": { "default": "./lib/index.js" },
+    "./client": { "default": "./lib/client.js" },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": { "patch": "cordis.patch.yml" },
+    "client": {
+      "inject": ["@deepseek-ai/dsh-client-ui-slots"],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": "*"
+  }
+}

@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync, readdirSync, statSync, utimesSync, chmodSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync, readdirSync, statSync, utimesSync, chmodSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
@@ -239,4 +239,61 @@ export function makeHttpStubInstall(base) {
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.0.0-test', type: 'module' }))
   writeFileSync(join(dir, 'lib', 'bin.js'), HTTP_STUB_BIN)
   return dir
+}
+
+// ── P2 helpers ──────────────────────────────────────────────────────────────
+export const PLUGIN_DIR = fileURLToPath(new URL('../packages/dsh-recovery-plugin/', import.meta.url))
+export function installRecoveryPlugin(home) {
+  const nm = join(home, 'profiles', 'web', 'node_modules')
+  mkdirSync(nm, { recursive: true })
+  const link = join(nm, 'dsh-recovery-plugin')
+  try { rmSync(link, { force: true, recursive: true }) } catch {}
+  symlinkSync(PLUGIN_DIR, link, process.platform === 'win32' ? 'junction' : 'dir')
+  const p = join(home, 'profiles', 'web', 'package.json')
+  const m = JSON.parse(readFileSync(p, 'utf8'))
+  m.dependencies = { ...(m.dependencies ?? {}), 'dsh-recovery-plugin': 'link:dsh-recovery-plugin' }
+  m.dsh.profile.bundles = [...m.dsh.profile.bundles, 'dsh-recovery-plugin']
+  writeFileSync(p, JSON.stringify(m, null, 2) + '\n')
+  return link
+}
+export function addRuntimeCrasher(home) {
+  const dir = join(home, 'profiles', 'web', 'node_modules', 'runtime-crasher')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'runtime-crasher', version: '1.0.0', dsh: { bundle: { patch: 'cordis.patch.yml' } } }))
+  // bundle patch rows resolve relative names against the PROFILE dir (the
+  // loader's root baseUrl), so the fixture must use a profile-relative path.
+  writeFileSync(join(dir, 'cordis.patch.yml'), "- insert:\n    - id: crasher\n      name: ./node_modules/runtime-crasher/index.mjs\n")
+  // The crasher self-restarts through the loader API after a delay: if the
+  // flag file is gone by then, the reload throws and the fiber transitions to
+  // FAILED — the exact in-process runtime failure the watchdog quarantines.
+  writeFileSync(join(dir, 'index.mjs'), "import { existsSync } from 'node:fs'\nexport const name = 'runtime-crasher'\nexport function apply(ctx) {\n  if (!existsSync(process.env.CRASH_FLAG ?? '')) throw new Error('crash: flag missing')\n  setTimeout(() => {\n    try { ctx.fiber.restart().catch(() => {}) } catch {}\n  }, Number(process.env.CRASH_RESTART_MS ?? 5000))\n}\n")
+  const p = join(home, 'profiles', 'web', 'package.json')
+  const m = JSON.parse(readFileSync(p, 'utf8'))
+  m.dependencies = { ...(m.dependencies ?? {}), 'runtime-crasher': '1.0.0' }
+  m.dsh.profile.bundles = [...m.dsh.profile.bundles, 'runtime-crasher']
+  writeFileSync(p, JSON.stringify(m, null, 2) + '\n')
+}
+export const crashFlagPath = (home) => join(home, 'crash-flag')
+export function armCrashFlag(home) { writeFileSync(crashFlagPath(home), 'armed\n') }
+export function disarmCrashFlag(home) { try { rmSync(crashFlagPath(home), { force: true }) } catch {} }
+export function touchCrasherConfig(home) {
+  const p = join(home, 'profiles', 'web', 'cordis.patch.yml')
+  let text = ''
+  try { text = readFileSync(p, 'utf8') } catch {}
+  writeFileSync(p, text + '\n- id: crasher\n  config:\n    nudge: 1\n')
+}
+export const bootWeb = (home, port, extraEnv = {}) => spawn(process.execPath, [join(DSH_DIR, 'lib', 'bin.js'), '--profile', 'web', '--port', String(port), '--no-open'], {
+  env: { ...process.env, DSH_HOME: home, DSH_RECOVERY_DSH_DIR: DSH_DIR, ...extraEnv },
+  stdio: ['ignore', 'pipe', 'pipe']
+})
+export const waitHttp = async (port, timeoutMs) => {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch('http://127.0.0.1:' + port + '/', { signal: AbortSignal.timeout(2000) })
+      if (res.status === 200) return true
+    } catch {}
+    await new Promise((r) => setTimeout(r, 300))
+  }
+  return false
 }

@@ -124,3 +124,71 @@ maxLadderRetries,autoLadder,autoSafeBoot,safemodePort}` 与 `guard.{pollMs,debou
   官方 `@deepseek-ai/*` 行**永不隔离**，核心失败走回滚/安全模式。
 - 渲染级白屏探针仍属 P2；`readyMs` 窗口（默认 30s）用于区分 boot failure 与 runtime crash。
 - 隔离只写 patch 行、不删包不删数据；`unquarantine` 只认自己的标记注释。
+
+---
+
+# P2 验收清单（进程内 watchdog + 状态卡 + 意图对账 + pre-install 快照）
+
+> P2 自测：44/44（新增 9 项，其中 3 项为真实 dsh web 端到端）。验收环境：
+> 隔离 DSH_HOME + 真实 dsh 安装（不碰真实 ~/.dsh）。
+
+## 交付物
+
+`packages/dsh-recovery-plugin/`：一个 bundle（`dsh.bundle` + `dsh.client`），
+host 行 id `dsh-recovery-watchdog`。**plane 合规**：host 行只消费
+`tools/loader/agentPresets/webServer`，不发布任何服务（无需 isolate realm）；
+browser 半区经 `dsh.client` 清单发现；**所有状态只写 `$DSH_HOME/recovery/`**
+（设计 §4 单一状态层：heartbeat.json、boot-state.json、state.json、
+incidents/、snapshots/、quarantine/presets/、journal.log）。
+
+安装（隔离环境验证用）：
+
+```sh
+# pnpm 可用时（推荐）
+dsh plugin --profile web add link:/home/andy/playground/dsh-recovery/packages/dsh-recovery-plugin
+# 或手动（等价效果，本仓库测试就是这么装的）
+ln -s /home/andy/playground/dsh-recovery/packages/dsh-recovery-plugin \
+  "$DSH_HOME/profiles/web/node_modules/dsh-recovery-plugin"
+# 然后把 'dsh-recovery-plugin' 加入 package.json 的 dependencies 与 dsh.profile.bundles
+```
+
+## 验收剧本
+
+1. **心跳 + boot 标记（不经 launcher 也有效）**：直接 `dsh --profile web` 启动 →
+   `recovery/heartbeat.json` 5s 内出现且持续刷新；`recovery/boot-state.json` 由插件补写；
+   Ctrl+C 干净退出后两者都被清除。
+2. **运行期 fiber 失败 → 自动隔离，进程不重启**（核心验收）：装一个“启动正常、
+   运行中 reload 会抛错”的第三方插件，触发其 reload（改它的 config 行触发 HMR，或
+   按测试里 self-restart 的方式）。期望：`cordis.patch.yml` 出现带
+   `# quarantined by dsh-recovery` 的 `disabled` 行；`GET /api/dsh-recovery/status`
+   的 `quarantined` 含该行；web 保持 HTTP 200、进程未重启；`unquarantine --id <id>`
+   可一键恢复。**注意**：watchdog 不只依赖文件 watcher——隔离写入后会直接通过
+   loader API 把「禁用该行」的补丁推给 root include，即时卸载失败行。
+3. **pre-install 快照 guard**：让 agent 用 bash 工具执行任意
+   `dsh plugin ... add/remove/update` → `recovery/journal.log` 出现
+   `pre-install-snapshot`；`recovery/snapshots/` 新增 Tier A（含脱敏 settings）+
+   Tier B（.agent-presets/**）快照；状态卡显示 guard armed。
+4. **intent 对账（pnpm reconcile 漏写层栈的补丁）**：制造「dependency 已装但
+   `dsh.profile.bundles` 漏写」→ 重启 web → 插件启动即把该依赖追加回 bundles
+   （journal `intent-reconcile`），下一次启动生效；`plugins.intent.json` 里声明了但
+   没装的只记 `intent-drift` 提示，绝不自动安装。
+5. **坏预设隔离 + 默认回退**：改坏自建预设的 `agent.cordis.yml`（或 tool mjs）→
+   启动或 30s 巡检内，整个目录被移入 `recovery/quarantine/presets/<id>`，
+   `settings.yaml` 的 `agent-presets.default` 若指向它则行级改回 `standard`
+   （先备份 settings）；已挂载该预设的会话（standing mount）不受影响。
+6. **渲染探针 + 状态卡**：打开页面后 3s 自动上报 render-ok；页面 `window error` /
+   `unhandledrejection` 自动上报失败（`state.json.clientRender` + incident）。
+   `curl http://127.0.0.1:<port>/api/dsh-recovery/status` 与
+   `POST /api/dsh-recovery/report-render` 均只接受 loopback（非 loopback 403）。
+   Settings 内出现 `dsh-recovery` 页：mode/last snapshot/last good/boot failures/
+   quarantined rows/client render/heartbeat/guard 状态。
+7. **客户端图**：`GET /plugins/dsh-recovery-plugin/client.js` 返回 200；
+   `GET /` 的 boot graph 含 `dsh-recovery-plugin`（页面刷新即装载）。
+
+## P2 明确边界
+
+- 渲染探针只做「上报 + 状态卡」，浏览器自动恢复属后续阶段。
+- 对账只补 bundles 层、不自动安装；fiber 隔离只对非 `@deepseek-ai/*` 行生效；
+  预设隔离只作用于 user root 下的目录（shipped 预设永不碰）。
+- 插件自身零服务发布、零 profile 内状态——卸掉插件后只在 recovery 层留下
+  journal/incident 记录，可随时 `dsh-recovery doctor` 查看。

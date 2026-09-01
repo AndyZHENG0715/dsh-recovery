@@ -89,3 +89,29 @@ node bin/dsh-recovery.mjs guard --poll-ms 30000
 
 阈值在 `recovery/config.json` 的 `boot.*` / `guard.*`，全部可覆盖（`launch` 也接受
 `--retries/--ready-ms/--threshold/--window-ms/--no-ladder/--no-auto-safe-boot`）。
+
+## P2：进程内 watchdog bundle（`packages/dsh-recovery-plugin`）
+
+一个可安装的 dsh bundle（`dsh.bundle` + `dsh.client`）：
+
+```sh
+dsh plugin --profile web add link:/abs/path/dsh-recovery/packages/dsh-recovery-plugin
+```
+
+- **fiber 失败 → 隔离**：监听 `internal/status`（global），第三方行 FAILED →
+  写带标记的 `disabled` 行并直接经 loader API 推给 root include，运行期卸载、
+  进程不重启；`unquarantine` 恢复。
+- **心跳 / boot 标记**：不经 launcher 的裸 `dsh web` 也由插件补写与清理。
+- **pre-install 快照**：`tools.guard` 同步拦截 `dsh plugin add/remove/update`，
+  执行前落 Tier A+B 快照（脱敏）。
+- **意图对账**：启动即把「已装但漏写 bundles 层」的 bundle 型依赖补回 layer；
+  `plugins.intent.json` 漂移只报告、不自动安装。
+- **坏预设隔离**：broken 的自建预设整目录移入 `recovery/quarantine/presets/`，
+  `agent-presets.default` 行级回退 `standard`（settings 先备份）。
+- **渲染探针**：页面 3s 上报 ok、window error/unhandledrejection 上报失败，
+  落入 `state.json.clientRender` + incident；loopback-only 路由
+  `GET /api/dsh-recovery/status`、`POST /api/dsh-recovery/report-render`。
+- **设置页状态卡**：`settings.section` 注册 `dsh-recovery` 页，展示恢复状态。
+
+宿主半区只消费服务、不发布服务（plane 合规）；全部状态走 `~/.dsh/recovery/`
+单一状态层。完整验收剧本见 `docs/ACCEPTANCE.md` 的 P2 章节。

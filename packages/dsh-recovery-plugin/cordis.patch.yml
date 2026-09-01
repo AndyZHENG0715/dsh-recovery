@@ -1,0 +1,7 @@
+# dsh-recovery in-process watchdog. Host row consumes services and writes only
+# into the recovery state layer (~/.dsh/recovery) — it publishes no service,
+# so no isolate realm is needed. The browser half is discovered through the
+# package's `dsh.client` declaration.
+- insert:
+    - id: dsh-recovery-watchdog
+      name: 'dsh-recovery-plugin'
