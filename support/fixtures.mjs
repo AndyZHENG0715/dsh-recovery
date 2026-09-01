@@ -1,7 +1,8 @@
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync, readdirSync, statSync, utimesSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync, readdirSync, statSync, utimesSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
+import net from 'node:net'
 import zlib from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 import { dirname } from 'node:path'
@@ -51,7 +52,9 @@ export function makeHome(opts = {}) {
   writeFileSync(join(home, 'profiles', 'web', 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n')
 
   writeFileSync(join(home, 'settings.yaml'), SETTINGS_GOOD)
-  writeFileSync(join(home, '.credentials.yaml'), CREDENTIALS_GOOD)
+  const credPath = join(home, '.credentials.yaml')
+  writeFileSync(credPath, CREDENTIALS_GOOD)
+  chmodSync(credPath, 0o600) // dsh-credentials-local refuses 644
   writeFileSync(join(home, 'storages', 'workspace.json'), JSON.stringify({ unit: { name: 'workspace', version: 2 }, global: { initialized: true, workspaceIds: [], archivedSessionIds: [] }, tables: {} }))
 
   writeFileSync(join(home, '.agent-presets', 'fixture-preset', 'preset.yml'), 'name: Fixture Preset\ndescription: test preset\n')
@@ -136,3 +139,70 @@ export const mutate = {
     writeFileSync(join(dir, 'cordis.patch.yml'), '- id: [unclosed\n')
   }
 }
+
+// ── P1 helpers ──────────────────────────────────────────────────────────────
+const STUB_BIN = `import { writeFileSync, readFileSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
+const home = process.env.DSH_HOME
+const argv = process.argv.slice(2)
+const mode = process.env.STUB_MODE ?? 'ok'
+const read = (p) => { try { return readFileSync(join(home, p), 'utf8') } catch { return '' } }
+mkdirSync(join(home, 'stub-record'), { recursive: true })
+writeFileSync(join(home, 'stub-record', 'last.json'), JSON.stringify({ argv, mode, home, patch: read('profiles/web/cordis.patch.yml'), safemodePatch: read('profiles/safemode/cordis.patch.yml') }))
+if (mode === 'ok') process.exit(0)
+if (mode === 'fail-attributed') {
+  const patch = read('profiles/web/cordis.patch.yml')
+  if (patch.includes('break-row') && !patch.includes('quarantined by dsh-recovery')) {
+    process.stderr.write('Error: failed to apply loader entry break-row (broken-plugin): boom\\n')
+    process.exit(1)
+  }
+  process.exit(0)
+}
+if (mode === 'fail-unattributed') {
+  const patch = read('profiles/web/cordis.patch.yml')
+  if (patch.includes('break-row') && !patch.includes('quarantined by dsh-recovery')) {
+    process.stderr.write('some opaque crash during composition\\n')
+    process.exit(1)
+  }
+  process.exit(0)
+}
+if (mode === 'always-fail') { process.stderr.write('opaque boom\\n'); process.exit(1) }
+if (mode === 'crash') process.kill(process.pid, 'SIGKILL')
+if (mode === 'check-safemode-patch') process.exit(read('profiles/safemode/cordis.patch.yml').trim().endsWith('[]') ? 0 : 1)
+process.exit(0)
+`
+export function makeStubInstall(base) {
+  const dir = join(base, 'stub-dsh')
+  mkdirSync(join(dir, 'lib'), { recursive: true })
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.0.0-test' }))
+  writeFileSync(join(dir, 'lib', 'bin.js'), STUB_BIN)
+  return dir
+}
+export const addBreakRow = (home) => {
+  const p = join(home, 'profiles', 'web', 'cordis.patch.yml')
+  writeFileSync(p, "- insert:\\n    - id: break-row\\n      name: ./never-resolved.mjs\\n")
+}
+export const addBrokenPlugin = (home) => {
+  const dir = join(home, 'profiles', 'web', 'node_modules', 'broken-plugin')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'broken-plugin', version: '1.0.0', dsh: { bundle: { patch: 'cordis.patch.yml' } } }))
+  writeFileSync(join(dir, 'cordis.patch.yml'), "- insert:\n    - id: broken-apply\n      name: ./node_modules/broken-plugin/boom.mjs\n")
+  writeFileSync(join(dir, 'boom.mjs'), "export const name = 'broken-plugin'\nexport function apply() { throw new Error('boom at apply') }\n")
+  const p = join(home, 'profiles', 'web', 'package.json')
+  const m = JSON.parse(readFileSync(p, 'utf8'))
+  m.dependencies = { 'broken-plugin': '1.0.0' }
+  m.dsh.profile.bundles = [...m.dsh.profile.bundles, 'broken-plugin']
+  writeFileSync(p, JSON.stringify(m, null, 2) + '\n')
+}
+export const writeBootFailures = (home, entries) => {
+  const p = join(home, 'recovery', 'state.json')
+  let state = {}
+  try { state = JSON.parse(readFileSync(p, 'utf8')) } catch { state = {} }
+  state.bootFailures = entries
+  mkdirSync(join(home, 'recovery'), { recursive: true })
+  writeFileSync(p, JSON.stringify(state, null, 2) + '\n')
+}
+export const freePort = () => new Promise((resolvePromise) => {
+  const server = net.createServer()
+  server.listen(0, '127.0.0.1', () => { const port = server.address().port; server.close(() => resolvePromise(port)) })
+})

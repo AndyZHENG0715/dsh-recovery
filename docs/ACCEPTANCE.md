@@ -72,3 +72,52 @@ DSH_HOME="$TMP/home" REC <命令…>      # 所有破坏性操作只作用于副
 - 渲染级白屏探针（P2）；坏预设自动回退 default=standard（P2 watchdog）；
 - DSH 本体版本回退（P3）；会话文件的确定性重写修复（P3）；
 - 自动隔离写 patch 行（P0 只有快照回滚与 safemode，隔离语义在 P1/P2）。
+
+---
+
+# P1 验收清单（launcher + boot 标记 + 熔断 + 恢复阶梯 + 安全 profile 守卫）
+
+> P1 自测：34/34（新增 9 项）。真机复核仍遵守「破坏性剧本先上副本」。
+
+## 新增命令
+
+| 命令 | 作用 |
+|---|---|
+| `launch [--profile web] [-- dsh 参数…]` | 透明转发 dsh（argv/stdio/信号/退出码），写 boot 标记；启动失败自动走「隔离 → 回滚 → 安全模式」阶梯；熔断后自动进入安全模式 |
+| `quarantine list` | 列出 dsh-recovery 写入的隔离行（带标记注释，不碰用户补丁） |
+| `unquarantine --id X | --all` | 只移除我们自己标记的隔离行，一键恢复被隔离插件 |
+| `guard [--once] [--poll-ms N]` | 安全 profile 守卫：启动时强制白名单还原 + fs.watch/轮询防漂移 |
+
+launch 的自身参数全部可选；未知参数一律原样透传给 dsh（`--profile` 由 launcher 注入）。
+配置：`recovery/config.json` 的 `boot.{failureWindowMs,failureThreshold,readyMs,
+maxLadderRetries,autoLadder,autoSafeBoot,safemodePort}` 与 `guard.{pollMs,debounceMs}`。
+
+## 验收剧本
+
+1. **透明转发 + 干净退出**：`REC launch --profile web -- --port 3080` 等价于
+   `dsh --profile web --port 3080`（stdio/信号/退出码透传）；Ctrl+C 后
+   `recovery/boot-state.json` 被清除。
+2. **崩溃证据**：launch 起来后 `kill -9` 子进程 → 标记残留；下一次 launch 记录
+   `previousCrash` + incident；`scan --json` 出现 `boot-marker-present`。
+3. **阶梯-隔离**（核心验收）：装一个启动即崩的第三方插件，`REC launch --profile web`
+   → 首次失败被归因 → 自动向 `cordis.patch.yml` 写入带
+   `# quarantined by dsh-recovery` 的 `disabled` 行 → 自动重启成功；`REC quarantine list`
+   可见；`REC unquarantine --id <row>` 一键恢复。真机版本用副本演练（本仓库 E2E 已用真实
+   dsh 走通：broken-plugin → 隔离 `broken-apply` → web 起 HTTP 200）。
+4. **阶梯-回滚**：制造无法归因的启动失败 → 自动 `rollback --good` → 重启成功；
+   pre-rollback 快照可查。
+5. **熔断 → 安全模式**：窗口内（默认 10 分钟）失败 ≥3 次 → 下次 launch 直接
+   `safemode enter` 并报告（`--auto-safe-boot` 默认还会自动拉起
+   `dsh --profile safemode --port 3081`，`--no-auto-safe-boot` 只准备不动手）。
+6. **守卫**：改坏 `profiles/safemode` 三个文件后 `REC launch --profile safemode`
+   能先还原白名单再启动；`REC guard --poll-ms 200` 常驻时，运行期改坏也会在
+   轮询周期内被还原（journal 记 `safemode-guard-repair`）。
+7. **可观测**：`doctor --json` 增加 `bootFailures` 计数、`previousCrash`、
+   `recentIncidents`；每次阶梯动作都有 journal + `recovery/incidents/*.json` 留痕。
+
+## P1 明确边界
+
+- 归因靠错误文本签名（`failed to apply loader entry <id> (<pkg>)` 取最内层匹配）；
+  官方 `@deepseek-ai/*` 行**永不隔离**，核心失败走回滚/安全模式。
+- 渲染级白屏探针仍属 P2；`readyMs` 窗口（默认 30s）用于区分 boot failure 与 runtime crash。
+- 隔离只写 patch 行、不删包不删数据；`unquarantine` 只认自己的标记注释。

@@ -63,3 +63,29 @@ safemode 进出、boot-probe 静态门 + 真实 HTTP-200 门、doctor 聚合。�
 
 已在 `@deepseek-ai/dsh@0.1.1-rc.2`、Node 24 上验证；zstd 会话解码需要 Node ≥22.15
 （DSH 自身的 Node 要求范围内）。
+
+## P1：launcher 与自动恢复阶梯
+
+```sh
+# 替代直接 dsh 启动：透传 + boot 标记 + 启动失败自动「隔离 → 回滚 → 安全模式」
+node bin/dsh-recovery.mjs launch --profile web -- --port 3080
+
+# 隔离行管理与一键恢复
+node bin/dsh-recovery.mjs quarantine list
+node bin/dsh-recovery.mjs unquarantine --id <row-id>
+
+# 安全 profile 守卫（启动强制还原 + fs.watch/轮询防漂移）
+node bin/dsh-recovery.mjs guard --once
+node bin/dsh-recovery.mjs guard --poll-ms 30000
+```
+
+阶梯语义（全部留痕于 `recovery/journal.log` 与 `recovery/incidents/`）：
+1. 崩溃证据：boot 标记正常退出即清除，异常退出留作下次启动的崩溃证据；
+2. 归因隔离：`failed to apply loader entry <id> (<pkg>)` 且非 `@deepseek-ai/*` →
+   写带标记的 `disabled` 行并重启（`unquarantine` 一键撤销）；
+3. 回滚：无法归因/核心行失败 → `rollback --good` 再试；
+4. 熔断：窗口内失败 ≥3 次 → 自动 `safemode enter`（默认顺带拉起
+   `dsh --profile safemode --port 3081`）。
+
+阈值在 `recovery/config.json` 的 `boot.*` / `guard.*`，全部可覆盖（`launch` 也接受
+`--retries/--ready-ms/--threshold/--window-ms/--no-ladder/--no-auto-safe-boot`）。

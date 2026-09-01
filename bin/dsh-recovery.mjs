@@ -8,6 +8,10 @@ import { rollback } from '../lib/rollback.mjs'
 import { safemodeEnter, safemodeExit } from '../lib/safemode.mjs'
 import { bootProbe } from '../lib/bootprobe.mjs'
 import { doctor } from '../lib/doctor.mjs'
+import { runLaunch } from '../lib/launch.mjs'
+import { runGuard } from '../lib/guard.mjs'
+import { listQuarantined, removeMarkedRow } from '../lib/patch-edit.mjs'
+import { profilePatchPath } from '../lib/paths.mjs'
 import { readState } from '../lib/state.mjs'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -28,6 +32,11 @@ COMMANDS
   boot-probe           static --dump-config gate + optional real boot with an HTTP-200 gate
   doctor               full diagnostic report with fix recommendations
   list                 list snapshots
+  launch               transparent relay to dsh + boot markers, circuit breaker, and the
+                       isolate -> rollback -> safemode ladder on boot failure
+  quarantine list      rows quarantined by the ladder
+  unquarantine         remove quarantine rows written by dsh-recovery (--id X | --all)
+  guard                safemode profile guard: enforce whitelist, then fs.watch + poll
 
 COMMON OPTIONS
   --home <dir>         DSH_HOME to operate on (default: $DSH_HOME or ~/.dsh)
@@ -40,6 +49,14 @@ rollback options: --id <id> | --latest | --good | --list | --types comp[,usercod
 safemode options: --reset (repair whitelist files on exit)
 boot-probe options: --live --port <n> --timeout-ms <n> --mark-good
 doctor options:  --json
+launch options:  everything not listed below passes through to dsh verbatim:
+  --profile <name> --home <dir> --dsh <dir> --json
+  --ladder | --no-ladder       enable/disable the automatic recovery ladder (default on)
+  --auto-safe-boot | --no-auto-safe-boot   boot safemode when the breaker trips (default on)
+  --retries <n> --ready-ms <n> --threshold <n> --window-ms <n> --safemode-port <n>
+quarantine options: --profile <name> --json
+unquarantine options: --id <id> | --all --profile <name> --json
+guard options:  --once --poll-ms <n> --watch-ms <n>
 
 EXIT CODES
   0 ok (doctor/scan: no errors)   1 errors / probe failed   2 usage error
@@ -180,6 +197,96 @@ async function main() {
       if (r.snapshots.length > 0) process.stdout.write(`snapshots: ${r.snapshots.length} (last-good ${r.state.lastGood ?? 'unset'})\n`)
     }
     process.exitCode = result.ok ? 0 : 1
+    return
+  }
+
+  if (command === 'launch') {
+    // Lenient parse: consume only our own flags; everything else passes
+    // through to dsh verbatim (dsh parses its launcher flags first).
+    const stringFlags = { home: 'string', profile: 'string', dsh: 'string', retries: 'string', 'ready-ms': 'string', threshold: 'string', 'window-ms': 'string', 'safemode-port': 'string' }
+    const boolFlags = { json: 'boolean', ladder: 'boolean', 'no-ladder': 'boolean', 'auto-safe-boot': 'boolean', 'no-auto-safe-boot': 'boolean', yes: 'boolean' }
+    const options = {}
+    const passthrough = []
+    for (let i = 0; i < rest.length; i++) {
+      const arg = rest[i]
+      if (arg === '--') continue
+      if (!arg.startsWith('--')) { passthrough.push(arg); continue }
+      let name = arg.slice(2)
+      let inline
+      const eq = name.indexOf('=')
+      if (eq !== -1) { inline = name.slice(eq + 1); name = name.slice(0, eq) }
+      if (name in stringFlags) {
+        options[name] = inline !== undefined ? inline : (i + 1 < rest.length ? rest[++i] : fail('option --' + name + ' needs a value'))
+        continue
+      }
+      if (name in boolFlags) { options[name] = inline === undefined ? true : inline !== 'false' && inline !== '0'; continue }
+      // unknown flag → dsh's business; pass everything from here on verbatim
+      passthrough.push(arg)
+    }
+    const home = resolveDshHome(process.env, options.home)
+    const profile = options.profile ?? 'web'
+    const install = findInstallAnchor(process.env, options)
+    const result = await runLaunch(home, {
+      profile,
+      install,
+      args: passthrough,
+      retries: options.retries,
+      readyMs: options['ready-ms'],
+      threshold: options.threshold,
+      windowMs: options['window-ms'],
+      safemodePort: options['safemode-port'],
+      autoLadder: options['no-ladder'] === true ? false : undefined,
+      autoSafeBoot: options['no-auto-safe-boot'] === true ? false : undefined
+    })
+    if (options.json) jsonOut(result)
+    else {
+      if (result.ok) {
+        process.stdout.write(`launch ok (attempts ${result.attempts}, code ${result.code})${result.recovered ? ' — recovered by the ladder' : ''}\n`)
+        for (const action of result.actions ?? []) process.stdout.write(`  ladder: ${action.step}${action.entryId ? ' ' + action.entryId : ''}${action.why ? ' (' + action.why + ')' : ''}\n`)
+      } else if (result.mode === 'safemode') {
+        process.stdout.write('launch: circuit breaker or boot failure → SAFEMODE\n')
+        process.stdout.write('next: ' + (result.next ?? '') + '\n')
+        for (const action of result.actions ?? []) process.stdout.write(`  ladder: ${action.step} ${action.entryId ?? ''} ${action.why ?? ''}\n`)
+        if (result.tail) process.stdout.write('--- last boot output ---\n' + result.tail + '\n')
+      } else {
+        process.stdout.write('launch failed: ' + (result.error ?? result.kind ?? 'unknown') + '\n')
+        for (const action of result.actions ?? []) process.stdout.write(`  ladder: ${action.step} ${action.entryId ?? ''} ${action.why ?? ''}\n`)
+        if (result.report) process.stdout.write(result.report + '\n')
+      }
+    }
+    process.exitCode = result.ok ? 0 : 1
+    return
+  }
+
+  if (command === 'quarantine' || command === 'unquarantine') {
+    const { options, positionals, home, profile } = common(rest, { home: 'string', profile: 'string', dsh: 'string', json: 'boolean', id: 'string', all: 'boolean' })
+    const patchPath = profilePatchPath(home, profile)
+    if (command === 'quarantine') {
+      const rows = listQuarantined(patchPath)
+      if (options.json) jsonOut({ profile, patchPath, quarantined: rows })
+      else {
+        if (rows.length === 0) process.stdout.write('no quarantined rows\n')
+        for (const row of rows) process.stdout.write(`${row.id} (patch line ${row.line})\n`)
+      }
+      return
+    }
+    process.stderr.write('dsh-recovery: operating on DSH_HOME=' + home + '\n')
+    const ids = options.all === true ? listQuarantined(patchPath).map((r) => r.id) : (options.id ? [options.id] : fail('unquarantine needs --id <id> or --all'))
+    const results = ids.map((id) => ({ id, ...removeMarkedRow(patchPath, id) }))
+    if (options.json) jsonOut({ profile, patchPath, results })
+    else for (const result of results) process.stdout.write(`unquarantine ${result.id}: ${result.ok ? 'removed ' + result.removed + ' row(s)' : 'failed: ' + result.error}\n`)
+    process.exitCode = results.every((r) => r.ok) ? 0 : 1
+    return
+  }
+
+  if (command === 'guard') {
+    const { options, positionals, home } = common(rest, { home: 'string', json: 'boolean', once: 'boolean', 'poll-ms': 'string', 'watch-ms': 'string' })
+    if (positionals.length > 0) fail('guard takes no positional arguments')
+    process.stderr.write('dsh-recovery: safemode guard on DSH_HOME=' + home + '\n')
+    const result = await runGuard(home, { once: options.once, pollMs: options['poll-ms'], watchMs: options['watch-ms'] })
+    if (options.json) jsonOut(result)
+    else process.stdout.write('guard ' + (result.once ? 'enforced once' : 'stopped (' + (result.stoppedBy ?? '') + ')') + '\n')
+    process.exitCode = 0
     return
   }
 
