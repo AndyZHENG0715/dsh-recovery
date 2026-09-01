@@ -12,7 +12,7 @@ DeepSeek Harness 自恢复 CLI：**纯 Node、零运行时依赖**。针对 DSH 
 | `snapshot` | 三层快照：Tier A 组合层（profile 5+1、脱敏 settings、storages、预设组合内容）+ Tier B 用户资产（.agent-presets/、skills）+ Tier C（`--data`，sessions） |
 | `rollback` | 恢复到 `--latest` / `--good` / `--id <id>`；自动 pre-rollback 快照；`--install` 跑 `pnpm install --frozen-lockfile`；事后 scan + `dsh --dump-config` 双重验证门 |
 | `safemode enter|exit` | 维护 `profiles/safemode` 白名单 profile（核心 bundles + 空 patch），enter 前自动快照 |
-| `boot-probe` | 在**一次性临时 DSH_HOME 副本**里跑官方 `--dump-config` 静态门 + 可选 `--live` 真实启动 + HTTP 200 门（不写真实 home） |
+| `boot-probe` | 在**一次性临时 DSH_HOME 副本**里跑官方 `--dump-config` 静态门 + 可选 `--live` 真实启动 + HTTP 200 门（不写真实 home；live 阶段带 `--no-open`，并清掉调用方的 DSH_WEB_URL/DSH_SESSION_* 等会话环境变量，绝不弹浏览器、绝不触碰真实会话句柄） |
 | `doctor` | scan + 状态 + 快照清单 + 按错误码给修复建议；`--json` 机器可读 |
 | `list` | 快照清单 |
 
@@ -38,7 +38,7 @@ DSH_HOME=~/.dsh node bin/dsh-recovery.mjs safemode enter
   原文 sha256；`.credentials.yaml` 只存指纹，内容从不复制。`--include-settings` 才存
   settings 原文（0600），回滚仅从 verbatim 快照还原 settings，脱敏快照永不覆盖现网密钥。
 - 回滚前自动 pre-rollback 快照，回滚本身可逆；Tier B/C 回滚是 overlay（不删快照后新增的文件）。
-- `boot-probe` 只读写 `$TMPDIR` 下的临时 home，真实 home 零写入。
+- `boot-probe` 只读写 `$TMPDIR` 下的临时 home，真实 home 零写入；live 子进程显式传 `--no-open` 且剥离会话环境变量，不会弹默认浏览器，也不读取真实会话句柄。
 - 快照清单（manifest）记录 DSH 版本与每个文件 sha256，便于升级归因。
 
 ## 已知 P0 边界（对应设计文档的后续阶段）

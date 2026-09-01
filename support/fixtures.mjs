@@ -206,3 +206,37 @@ export const freePort = () => new Promise((resolvePromise) => {
   const server = net.createServer()
   server.listen(0, '127.0.0.1', () => { const port = server.address().port; server.close(() => resolvePromise(port)) })
 })
+
+const HTTP_STUB_BIN = `import { writeFileSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
+import http from 'node:http'
+const home = process.env.DSH_HOME
+const argv = process.argv.slice(2)
+const pickedEnv = () => {
+  const out = {}
+  for (const k of ['DSH_WEB_URL', 'DSH_WEB_MODE', 'DSH_SESSION_ID', 'DSH_SESSION_JSONL', 'DSH_SHELL']) out[k] = process.env[k] ?? null
+  return out
+}
+// boot-probe stages a throwaway home; tests point the record dir at the fixture home
+const recordDir = process.env.STUB_RECORD_DIR ?? join(home, 'stub-record')
+mkdirSync(recordDir, { recursive: true })
+if (argv.includes('--dump-config')) {
+  writeFileSync(join(recordDir, 'static-argv.json'), JSON.stringify({ argv, env: pickedEnv() }))
+  process.exit(0)
+}
+const portIndex = argv.indexOf('--port')
+const port = portIndex >= 0 ? Number(argv[portIndex + 1]) : 0
+writeFileSync(join(recordDir, 'live-argv.json'), JSON.stringify({ argv, env: pickedEnv() }))
+const server = http.createServer((_req, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html>ok</html>') })
+server.listen(port, '127.0.0.1')
+const stop = () => server.close(() => process.exit(0))
+process.on('SIGTERM', stop)
+process.on('SIGINT', stop)
+`
+export function makeHttpStubInstall(base) {
+  const dir = join(base, 'http-stub-dsh')
+  mkdirSync(join(dir, 'lib'), { recursive: true })
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.0.0-test', type: 'module' }))
+  writeFileSync(join(dir, 'lib', 'bin.js'), HTTP_STUB_BIN)
+  return dir
+}

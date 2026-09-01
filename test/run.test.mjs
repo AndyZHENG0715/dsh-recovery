@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { makeHome, clean, runCli, mutate, HAS_DSH, SECRET_VALUE } from '../support/fixtures.mjs'
+import { makeHome, clean, runCli, mutate, HAS_DSH, SECRET_VALUE, makeHttpStubInstall } from '../support/fixtures.mjs'
 import { parseYaml } from '../lib/yaml.mjs'
 
 const findCode = (json, code) => json.findings?.some((f) => f.code === code)
@@ -220,6 +220,27 @@ test('boot-probe: live HTTP-200 gate on a healthy profile', async (t) => {
     const json = JSON.parse(res.stdout)
     assert.equal(json.ok, true, res.stderr + JSON.stringify(json))
     assert.equal(json.live.httpStatus, 200)
+  } finally { clean(home) }
+})
+
+test('boot-probe live: spawns with --no-open and scrubbed session env', async () => {
+  const home = makeHome()
+  try {
+    const stub = makeHttpStubInstall(join(home, '..'))
+    const res = await runCli(home, ['boot-probe', '--live', '--dsh', stub, '--json'], { STUB_RECORD_DIR: join(home, 'stub-record') })
+    assert.equal(res.code, 0, res.stderr + res.stdout)
+    const json = JSON.parse(res.stdout)
+    assert.equal(json.ok, true, JSON.stringify(json))
+    assert.equal(json.live.httpStatus, 200)
+    const live = JSON.parse(readFileSync(join(home, 'stub-record', 'live-argv.json'), 'utf8'))
+    assert.ok(live.argv.includes('--no-open'), 'live spawn must pass --no-open: ' + JSON.stringify(live.argv))
+    assert.ok(live.argv.includes('--port'))
+    for (const key of ['DSH_WEB_URL', 'DSH_WEB_MODE', 'DSH_SESSION_ID', 'DSH_SESSION_JSONL', 'DSH_SHELL']) {
+      assert.equal(live.env[key], null, key + ' must be scrubbed from the probe env')
+    }
+    const stat = JSON.parse(readFileSync(join(home, 'stub-record', 'static-argv.json'), 'utf8'))
+    assert.ok(stat.argv.includes('--dump-config'))
+    assert.equal(stat.env.DSH_WEB_URL, null, 'static probe env must be scrubbed too')
   } finally { clean(home) }
 })
 

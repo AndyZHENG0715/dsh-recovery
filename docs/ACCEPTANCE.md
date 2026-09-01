@@ -56,6 +56,9 @@ DSH_HOME="$TMP/home" REC <命令…>      # 所有破坏性操作只作用于副
       被改坏的 safemode patch 修回空模板并清掉 active 标记。
 - [ ] **boot-probe 隔离**：`boot-probe --live` 运行前后，真实 home 的 mtime 集合不变
       （探针只写 `$TMPDIR` 下的临时 home；结束自动清理）。
+- [ ] **无用户可见副作用**：live 探测期间不弹默认浏览器（spawn 参数含 `--no-open`，
+      已由回归测试断言），不打印 URL/提示到终端，子进程环境已剥离
+      `DSH_WEB_URL/DSH_WEB_MODE/DSH_SESSION_ID/DSH_SESSION_JSONL/DSH_SHELL`。
 - [ ] **退出码**：`scan`/`doctor` 0=无错误、1=有错误、2=用法错误；`rollback` 失败为 1。
 
 ## 3. 真机轻量复核（不制造破坏）
