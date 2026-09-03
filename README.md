@@ -18,7 +18,7 @@ DeepSeek Harness recovery system: a **pure Node, zero-runtime-dependency** CLI p
 | `scan` | Scan profile, settings, storages, user presets, and sessions for common corruption |
 | `snapshot` | Create recovery snapshots; supports composition, user assets, and optional data tier |
 | `rollback` | Roll back to `--latest`, `--good`, or `--id <id>` |
-| `safemode enter|exit` | Enter or exit the safemode profile |
+| `safemode enter/exit` | Enter or exit the safemode profile |
 | `boot-probe` | Run static and real boot verification in a temporary `DSH_HOME` |
 | `doctor` | Aggregate scan results, state, snapshot inventory, and recovery hints |
 | `list` | List snapshots |
