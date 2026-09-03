@@ -157,7 +157,7 @@ test('P1 E2E: real dsh, broken third-party bundle → auto-quarantine → web bo
     await runCli(home, ['snapshot', '--reason', 'healthy-baseline', '--mark-good'])
     addBrokenPlugin(home)
     const port = await freePort()
-    const child = spawn(process.execPath, [join(process.cwd(), 'bin', 'dsh-recovery.mjs'), 'launch', '--profile', 'web', '--', '--port', String(port)], {
+    const child = spawn(process.execPath, [join(process.cwd(), 'bin', 'dsh-recovery.mjs'), 'launch', '--profile', 'web', '--', '--port', String(port), '--no-open'], {
       env: { ...process.env, DSH_HOME: home, DSH_RECOVERY_DSH_DIR: DSH_DIR },
       stdio: ['ignore', 'pipe', 'pipe']
     })
