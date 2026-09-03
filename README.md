@@ -1,42 +1,44 @@
 # dsh-recovery
 
-DeepSeek Harness 自恢复系统：一个 **纯 Node、零运行时依赖** 的 CLI + 进程内 watchdog bundle，用于在 DSH 的配置、插件、预设、会话或升级损坏时，按「诊断 → 快照 → 回滚 → 安全模式 → 启动验证」的阶梯恢复到可用状态。
+中文版本请见 [README-ZH.md](./README-ZH.md)
+
+DeepSeek Harness recovery system: a **pure Node, zero-runtime-dependency** CLI plus an in-process watchdog bundle that helps DSH recover from broken configuration, plugins, presets, sessions, or upgrade regressions using a staged flow of **diagnose → snapshot → rollback → safe mode → boot verification**.
 
 ## Current status
 
-- **P0**：CLI recovery flow — 已实现
-- **P1**：launcher 与自动恢复阶梯 — 已实现
-- **P2**：进程内 watchdog bundle — 已实现
-- **P3**：修复模式胶囊 / DSH 本体回退 / 会话修复 — 待实现
+- **P0**: CLI recovery flow — implemented
+- **P1**: launcher and automatic recovery ladder — implemented
+- **P2**: in-process watchdog bundle — implemented
+- **P3**: rescue capsule / DSH runtime rollback / session repair — planned
 
 ## Commands
 
-| 命令 | 作用 |
+| Command | Purpose |
 |---|---|
-| `scan` | 扫描 profile、settings、storages、用户预设、会话等常见损坏点 |
-| `snapshot` | 创建恢复快照；支持组合层、用户资产、可选数据层 |
-| `rollback` | 回滚到 `--latest` / `--good` / `--id <id>` |
-| `safemode enter|exit` | 进入/退出安全模式 profile |
-| `boot-probe` | 在临时 DSH_HOME 中做静态 + 真实启动验证 |
-| `doctor` | 聚合 scan、状态、快照清单和修复建议 |
-| `list` | 列出快照 |
-| `launch` | 启动包装器：透明转发 + boot 标记 + 自动恢复阶梯 |
-| `quarantine` | 隔离行管理 |
-| `unquarantine` | 恢复被隔离的行 |
-| `guard` | 安全 profile 守卫 |
+| `scan` | Scan profile, settings, storages, user presets, and sessions for common corruption |
+| `snapshot` | Create recovery snapshots; supports composition, user assets, and optional data tier |
+| `rollback` | Roll back to `--latest`, `--good`, or `--id <id>` |
+| `safemode enter|exit` | Enter or exit the safemode profile |
+| `boot-probe` | Run static and real boot verification in a temporary `DSH_HOME` |
+| `doctor` | Aggregate scan results, state, snapshot inventory, and recovery hints |
+| `list` | List snapshots |
+| `launch` | Launch wrapper with transparent argv forwarding, boot markers, and the recovery ladder |
+| `quarantine` | Manage quarantined rows |
+| `unquarantine` | Restore a quarantined row |
+| `guard` | Safemode profile guard |
 
-常用参数：
+Common flags:
 
-- `--home <dir>`：默认 `$DSH_HOME` / `~/.dsh`
-- `--profile web`：默认 profile
-- `--dsh <dir>`：默认 `$DSH_RECOVERY_DSH_DIR`
-- `--json`：输出机器可读结果
+- `--home <dir>`: defaults to `$DSH_HOME` / `~/.dsh`
+- `--profile web`: default profile
+- `--dsh <dir>`: defaults to `$DSH_RECOVERY_DSH_DIR`
+- `--json`: machine-readable output
 
-退出码：
+Exit codes:
 
-- `0`：通过
-- `1`：有错误 / 探针失败
-- `2`：用法错误
+- `0`: success
+- `1`: error / probe failure
+- `2`: usage error
 
 ## Run
 
@@ -49,43 +51,43 @@ DSH_HOME=~/.dsh node bin/dsh-recovery.mjs safemode enter
 node bin/dsh-recovery.mjs launch --profile web -- --port 3080
 ```
 
-如果没有 pnpm，`--install` 会给出明确告警；可用 `--pnpm <bin>` 或 `DSH_RECOVERY_PNPM` 指定。
+If `pnpm` is unavailable, `--install` will emit a clear warning. You can point to a binary with `--pnpm <bin>` or `DSH_RECOVERY_PNPM`.
 
 ## Safety model
 
-- 快照正文 **永不** 包含密钥：
-  - `settings.yaml` 默认只存脱敏结构（secret 键 → `***`）+ 原文 sha256
-  - `.credentials.yaml` 只存指纹，不复制内容
-  - `--include-settings` 才会保存 settings 原文
-- 回滚前会自动创建 pre-rollback 快照，回滚本身可逆
-- `boot-probe` 只读写 `$TMPDIR` 下的临时 home，真实 home 零写入
-- `boot-probe` 的 live 阶段显式传 `--no-open`，不会弹默认浏览器
-- 快照清单（manifest）记录 DSH 版本与文件 sha256，便于升级归因
-- 所有诊断与事故记录尽量先过脱敏
+- Snapshot contents **never** include secrets:
+  - `settings.yaml` is stored as a redacted structure by default (`secret` keys → `***`) plus the original SHA-256
+  - `.credentials.yaml` is fingerprinted only; its contents are never copied
+  - `--include-settings` is required to store the raw `settings.yaml`
+- A pre-rollback snapshot is created automatically before rollback
+- `boot-probe` writes only to a temporary home under `$TMPDIR`; the real home is never modified
+- The live phase of `boot-probe` passes `--no-open`, so it will not open a browser
+- Snapshot manifests record the DSH version and file SHA-256 hashes for upgrade attribution
+- Diagnostic and incident output should be redacted before export
 
 ## P1 launcher and recovery ladder
 
 ```sh
-# 替代直接 dsh 启动：透传 + boot 标记 + 启动失败自动恢复
+# Replace direct dsh startup: transparent forwarding + boot marker + automatic recovery
 node bin/dsh-recovery.mjs launch --profile web -- --port 3080
 
-# 隔离行管理与一键恢复
+# Quarantine management and one-step restore
 node bin/dsh-recovery.mjs quarantine list
 node bin/dsh-recovery.mjs unquarantine --id <row-id>
 
-# 安全 profile 守卫
+# Safemode profile guard
 node bin/dsh-recovery.mjs guard --once
 node bin/dsh-recovery.mjs guard --poll-ms 30000
 ```
 
-启动阶梯会记录到 `recovery/journal.log` 和 `recovery/incidents/`：
+The launcher records recovery state in `recovery/journal.log` and `recovery/incidents/`:
 
-1. 崩溃证据：boot 标记正常退出即清除，异常退出保留作为下次启动证据
-2. 归因隔离：非核心第三方行失败时，写入带标记的 `disabled` 行并重启
-3. 回滚：无法归因或核心行失败时，回滚到 `--good` 快照
-4. 熔断：窗口内失败达到阈值后自动进入 `safemode`
+1. Crash evidence: the boot marker is cleared on clean exit; if it remains, the next launch treats it as crash evidence
+2. Attribution quarantine: if a non-core third-party row fails, a marked `disabled` row is written and the process is restarted
+3. Rollback: if the failure cannot be attributed, or a core row fails, the last good snapshot is restored
+4. Circuit breaker: repeated failures within a time window trigger `safemode`
 
-阈值位于 `recovery/config.json` 的 `boot.*` / `guard.*`，可覆盖。`launch` 也接受：
+Thresholds live in `recovery/config.json` under `boot.*` and `guard.*`, and can be overridden. `launch` also accepts:
 
 - `--retries`
 - `--ready-ms`
@@ -96,53 +98,53 @@ node bin/dsh-recovery.mjs guard --poll-ms 30000
 
 ## P2 in-process watchdog bundle
 
-`packages/dsh-recovery-watchdog` 是一个可安装的 dsh bundle：
+`packages/dsh-recovery-watchdog` is an installable dsh bundle:
 
 ```sh
 dsh plugin --profile web add link:/abs/path/dsh-recovery/packages/dsh-recovery-watchdog
 ```
 
-它负责：
+It is responsible for:
 
-- fiber 失败后自动隔离非核心行
-- 写入 / 清理 boot marker 和 heartbeat
-- 在插件安装前自动落 Tier A+B 快照
-- 对已安装但未写入 bundles layer 的依赖做意图对账
-- 自动隔离损坏的用户预设，并把默认预设回退到 `standard`
-- 运行时复核用户预设挂载健康状态
-- 提供 loopback-only 的状态与 render report 路由
-- 在设置页注册恢复状态卡
+- quarantining non-core rows after fiber failure
+- writing and clearing the boot marker and heartbeat
+- taking Tier A+B snapshots before plugin installation changes
+- reconciling dependencies that are installed but missing from the bundles layer
+- quarantining broken user presets and falling back the default preset to `standard`
+- verifying user preset mount health at runtime
+- exposing loopback-only status and render report routes
+- registering a recovery status card in Settings
 
 ## Tests
 
 ```sh
-npm test        # node --test；全部在隔离的 DSH_HOME 副本上运行，不碰真实 ~/.dsh
+npm test        # node --test; runs in isolated DSH_HOME copies and never touches real ~/.dsh
 ```
 
-目前测试覆盖：
+Current test coverage includes:
 
-- YAML 子集解析器单测
-- 损坏检测
-- 三层快照与脱敏
-- 回滚还原与验证门
-- safemode 进出
-- boot-probe 静态门 + HTTP 200 门
-- doctor 聚合
-- P2 watchdog 的 unit / E2E 路径
+- YAML subset parser unit tests
+- corruption detection
+- three-tier snapshots and redaction
+- rollback restoration and validation gates
+- safemode enter/exit
+- boot-probe static gate + HTTP 200 gate
+- doctor aggregation
+- P2 watchdog unit and E2E paths
 
 ## Notes
 
-- 已在 `@deepseek-ai/dsh@0.1.1-rc.2`、Node 24 上验证
-- zstd 会话解码需要 Node ≥ 22.15
-- `boot-probe` 和 `launch` 的行为依赖可用的 DSH 安装
-- 真实验收步骤见 `docs/ACCEPTANCE.md`
+- Verified on `@deepseek-ai/dsh@0.1.1-rc.2` and Node 24
+- zstd session decoding requires Node >= 22.15
+- `boot-probe` and `launch` depend on a usable DSH installation
+- Full acceptance steps are documented in `docs/ACCEPTANCE.md`
 
 ## Roadmap
 
 ### P3
-- 修复模式胶囊
-- DSH 本体回退
-- 会话修复
+- Rescue capsule
+- DSH runtime rollback
+- Session repair
 
 ## Project docs
 
