@@ -145,9 +145,9 @@ incidents/、snapshots/、quarantine/presets/、journal.log）。
 
 ```sh
 # pnpm 可用时（推荐）
-dsh plugin --profile web add link:/home/andy/playground/dsh-recovery/packages/dsh-recovery-plugin
+dsh plugin --profile web add link:/path/to/dsh-recovery/packages/dsh-recovery-plugin
 # 或手动（等价效果，本仓库测试就是这么装的）
-ln -s /home/andy/playground/dsh-recovery/packages/dsh-recovery-plugin \
+ln -s /path/to/dsh-recovery/packages/dsh-recovery-plugin \
   "$DSH_HOME/profiles/web/node_modules/dsh-recovery-plugin"
 # 然后把 'dsh-recovery-plugin' 加入 package.json 的 dependencies 与 dsh.profile.bundles
 ```
