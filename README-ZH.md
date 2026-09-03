@@ -16,7 +16,7 @@ DeepSeek Harness 自恢复系统：一个 **纯 Node、零运行时依赖** 的 
 | `scan` | 扫描 profile、settings、storages、用户预设、会话等常见损坏点 |
 | `snapshot` | 创建恢复快照；支持组合层、用户资产、可选数据层 |
 | `rollback` | 回滚到 `--latest` / `--good` / `--id <id>` |
-| `safemode enter|exit` | 进入/退出安全模式 profile |
+| `safemode enter/exit` | 进入/退出安全模式 profile |
 | `boot-probe` | 在临时 DSH_HOME 中做静态 + 真实启动验证 |
 | `doctor` | 聚合 scan、状态、快照清单和修复建议 |
 | `list` | 列出快照 |
