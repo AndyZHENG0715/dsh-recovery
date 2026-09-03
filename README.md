@@ -2,7 +2,7 @@
 
 DeepSeek Harness 自恢复 CLI：**纯 Node、零运行时依赖**。针对 DSH 目前 fail-loud 的启动模型
 （坏一个插件/配置文件 = 整个 `dsh web` 起不来），提供「诊断 → 快照 → 回滚 → 安全模式 →
-真实启动验证」的最小闭环。设计文档见上级目录 `dsh-recovery-design.md`。
+真实启动验证」的最小闭环。设计文档见 [`docs/dsh-recovery-design.md`](docs/dsh-recovery-design.md),调研报告见 [`docs/dsh-recovery-research.md`](docs/dsh-recovery-research.md)。
 
 ## 命令
 
