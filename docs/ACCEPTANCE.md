@@ -134,7 +134,7 @@ maxLadderRetries,autoLadder,autoSafeBoot,safemodePort}` 与 `guard.{pollMs,debou
 
 ## 交付物
 
-`packages/dsh-recovery-plugin/`：一个 bundle（`dsh.bundle` + `dsh.client`），
+`packages/dsh-recovery-watchdog/`：一个 bundle（`dsh.bundle` + `dsh.client`），
 host 行 id `dsh-recovery-watchdog`。**plane 合规**：host 行只消费
 `tools/loader/agentPresets/webServer`，不发布任何服务（无需 isolate realm）；
 browser 半区经 `dsh.client` 清单发现；**所有状态只写 `$DSH_HOME/recovery/`**
@@ -145,11 +145,11 @@ incidents/、snapshots/、quarantine/presets/、journal.log）。
 
 ```sh
 # pnpm 可用时（推荐）
-dsh plugin --profile web add link:/path/to/dsh-recovery/packages/dsh-recovery-plugin
+dsh plugin --profile web add link:/path/to/dsh-recovery/packages/dsh-recovery-watchdog
 # 或手动（等价效果，本仓库测试就是这么装的）
-ln -s /path/to/dsh-recovery/packages/dsh-recovery-plugin \
-  "$DSH_HOME/profiles/web/node_modules/dsh-recovery-plugin"
-# 然后把 'dsh-recovery-plugin' 加入 package.json 的 dependencies 与 dsh.profile.bundles
+ln -s /path/to/dsh-recovery/packages/dsh-recovery-watchdog \
+  "$DSH_HOME/profiles/web/node_modules/dsh-recovery-watchdog"
+# 然后把 'dsh-recovery-watchdog' 加入 package.json 的 dependencies 与 dsh.profile.bundles
 ```
 
 ## 验收剧本
@@ -182,8 +182,8 @@ ln -s /path/to/dsh-recovery/packages/dsh-recovery-plugin \
    `POST /api/dsh-recovery/report-render` 均只接受 loopback（非 loopback 403）。
    Settings 内出现 `dsh-recovery` 页：mode/last snapshot/last good/boot failures/
    quarantined rows/client render/heartbeat/guard 状态。
-7. **客户端图**：`GET /plugins/dsh-recovery-plugin/client.js` 返回 200；
-   `GET /` 的 boot graph 含 `dsh-recovery-plugin`（页面刷新即装载）。
+7. **客户端图**：`GET /plugins/dsh-recovery-watchdog/client.js` 返回 200；
+   `GET /` 的 boot graph 含 `dsh-recovery-watchdog`（页面刷新即装载）。
 8. **运行时预设复核**（新增验收）：制造两个“静态健康、挂载必坏”的用户预设——
    一个包名不可解析（`ghost-preset`），一个向 root realm 发布服务（`leaky-preset`）；
    启动后 1~2 个轮转周期（`presetCheckMs: 200`）内，两者被 `standingKeyFor`

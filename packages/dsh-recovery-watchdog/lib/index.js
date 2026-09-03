@@ -15,7 +15,7 @@ import { createRequire } from 'node:module'
 import { spawnSync } from 'node:child_process'
 import { parseYaml } from './yaml-subset.mjs'
 
-export const name = 'dsh-recovery-plugin'
+export const name = 'dsh-recovery-watchdog'
 export const inject = ['tools', 'loader', 'agentPresets']
 
 const WATCHDOG_ID = 'dsh-recovery-watchdog'
@@ -444,7 +444,7 @@ class Watchdog {
     const pkgName = entry?.name
     if (typeof id !== 'string' || id === '') return
     if (id === WATCHDOG_ID) return
-    if (typeof pkgName === 'string' && (pkgName.startsWith('@deepseek-ai/') || pkgName === 'dsh-recovery-plugin')) return
+    if (typeof pkgName === 'string' && (pkgName.startsWith('@deepseek-ai/') || pkgName === 'dsh-recovery-watchdog')) return
     if (this.failedOnce.has(id)) return
     this.failedOnce.add(id)
     let message = ''

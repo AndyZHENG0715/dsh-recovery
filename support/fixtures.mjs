@@ -242,17 +242,17 @@ export function makeHttpStubInstall(base) {
 }
 
 // ── P2 helpers ──────────────────────────────────────────────────────────────
-export const PLUGIN_DIR = fileURLToPath(new URL('../packages/dsh-recovery-plugin/', import.meta.url))
+export const PLUGIN_DIR = fileURLToPath(new URL('../packages/dsh-recovery-watchdog/', import.meta.url))
 export function installRecoveryPlugin(home) {
   const nm = join(home, 'profiles', 'web', 'node_modules')
   mkdirSync(nm, { recursive: true })
-  const link = join(nm, 'dsh-recovery-plugin')
+  const link = join(nm, 'dsh-recovery-watchdog')
   try { rmSync(link, { force: true, recursive: true }) } catch {}
   symlinkSync(PLUGIN_DIR, link, process.platform === 'win32' ? 'junction' : 'dir')
   const p = join(home, 'profiles', 'web', 'package.json')
   const m = JSON.parse(readFileSync(p, 'utf8'))
-  m.dependencies = { ...(m.dependencies ?? {}), 'dsh-recovery-plugin': 'link:dsh-recovery-plugin' }
-  m.dsh.profile.bundles = [...m.dsh.profile.bundles, 'dsh-recovery-plugin']
+  m.dependencies = { ...(m.dependencies ?? {}), 'dsh-recovery-watchdog': 'link:dsh-recovery-watchdog' }
+  m.dsh.profile.bundles = [...m.dsh.profile.bundles, 'dsh-recovery-watchdog']
   writeFileSync(p, JSON.stringify(m, null, 2) + '\n')
   return link
 }

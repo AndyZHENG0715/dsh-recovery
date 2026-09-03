@@ -90,12 +90,12 @@ node bin/dsh-recovery.mjs guard --poll-ms 30000
 阈值在 `recovery/config.json` 的 `boot.*` / `guard.*`，全部可覆盖（`launch` 也接受
 `--retries/--ready-ms/--threshold/--window-ms/--no-ladder/--no-auto-safe-boot`）。
 
-## P2：进程内 watchdog bundle（`packages/dsh-recovery-plugin`）
+## P2：进程内 watchdog bundle（`packages/dsh-recovery-watchdog`）
 
 一个可安装的 dsh bundle（`dsh.bundle` + `dsh.client`）：
 
 ```sh
-dsh plugin --profile web add link:/abs/path/dsh-recovery/packages/dsh-recovery-plugin
+dsh plugin --profile web add link:/abs/path/dsh-recovery/packages/dsh-recovery-watchdog
 ```
 
 - **fiber 失败 → 隔离**：监听 `internal/status`（global），第三方行 FAILED →

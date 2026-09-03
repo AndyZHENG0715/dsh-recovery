@@ -1,5 +1,5 @@
 {
-  "name": "dsh-recovery-plugin",
+  "name": "dsh-recovery-watchdog",
   "version": "0.2.0",
   "private": true,
   "type": "module",

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { readFile } from 'node:fs/promises'
 import vm from 'node:vm'
 import { makeHome, clean, installRecoveryPlugin, addRuntimeCrasher, armCrashFlag, disarmCrashFlag, touchCrasherConfig, bootWeb, waitHttp, freePort, HAS_DSH, mutate } from '../support/fixtures.mjs'
-import { isInstallCommand, snapshotSync, reconcileBundles, quarantineBrokenPresets, addDisabledRow, listQuarantined } from '../packages/dsh-recovery-plugin/lib/index.js'
+import { isInstallCommand, snapshotSync, reconcileBundles, quarantineBrokenPresets, addDisabledRow, listQuarantined } from '../packages/dsh-recovery-watchdog/lib/index.js'
 
 // ── unit tests (no boot) ───────────────────────────────────────────────────
 test('P2 unit: install-command matcher', () => {
@@ -67,7 +67,7 @@ test('P2 unit: plugin-local quarantine row helpers are marker-scoped', () => {
 })
 
 test('P2 client: module registers the settings section and render probe', async () => {
-  const source = await readFile(join(process.cwd(), 'packages', 'dsh-recovery-plugin', 'lib', 'client.js'), 'utf8')
+  const source = await readFile(join(process.cwd(), 'packages', 'dsh-recovery-watchdog', 'lib', 'client.js'), 'utf8')
   let captured = null
   const scheduled = []
   const fetches = []
@@ -92,7 +92,7 @@ test('P2 client: module registers the settings section and render probe', async 
   vm.createContext(sandbox)
   vm.runInContext(source, sandbox, { filename: 'client.js' })
   assert.ok(captured, 'client module must register')
-  assert.equal(captured.id, 'dsh-recovery-plugin')
+  assert.equal(captured.id, 'dsh-recovery-watchdog')
   const plugin = captured.factory(sandbox.require)
   assert.deepEqual(Array.from(plugin.inject), ['slots'])
   let registered = null
@@ -151,11 +151,11 @@ test('P2 E2E: watchdog boots — heartbeat, boot marker, status routes, client b
     const state = JSON.parse(readFileSync(join(home, 'recovery', 'state.json'), 'utf8'))
     assert.equal(state.clientRender.ok, false)
     // client bundle is served and part of the page graph
-    const clientRes = await fetch('http://127.0.0.1:' + port + '/plugins/dsh-recovery-plugin/client.js')
+    const clientRes = await fetch('http://127.0.0.1:' + port + '/plugins/dsh-recovery-watchdog/client.js')
     assert.equal(clientRes.status, 200)
-    assert.ok((await clientRes.text()).includes('dsh-recovery-plugin'))
+    assert.ok((await clientRes.text()).includes('dsh-recovery-watchdog'))
     const index = await (await fetch('http://127.0.0.1:' + port + '/')).text()
-    assert.ok(index.includes('dsh-recovery-plugin'), 'boot graph must carry the client entry')
+    assert.ok(index.includes('dsh-recovery-watchdog'), 'boot graph must carry the client entry')
     // clean shutdown tears down marker + heartbeat
     const code = await stop(child)
     child = null

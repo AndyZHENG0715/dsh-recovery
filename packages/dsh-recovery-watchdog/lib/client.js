@@ -2,11 +2,11 @@
 // Registers one `settings.section` entry (id: dsh-recovery) and reports page
 // render state to the host loopback route /api/dsh-recovery/report-render.
 window.__ModuleLoader__.load({
-	id: 'dsh-recovery-plugin',
+	id: 'dsh-recovery-watchdog',
 	factory: (require) => {
 		const React = require('react')
 		const { useState, useEffect, createElement: h } = React
-		const NS = 'dsh-recovery-plugin'
+		const NS = 'dsh-recovery-watchdog'
 
 		const post = (path, payload) => {
 			try {
