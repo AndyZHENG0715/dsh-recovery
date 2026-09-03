@@ -1,26 +1,44 @@
-# dsh-recovery (P0)
+# dsh-recovery
 
-DeepSeek Harness 自恢复 CLI：**纯 Node、零运行时依赖**。针对 DSH 目前 fail-loud 的启动模型
-（坏一个插件/配置文件 = 整个 `dsh web` 起不来），提供「诊断 → 快照 → 回滚 → 安全模式 →
-真实启动验证」的最小闭环。设计文档见 [`docs/dsh-recovery-design.md`](docs/dsh-recovery-design.md),调研报告见 [`docs/dsh-recovery-research.md`](docs/dsh-recovery-research.md)。
+DeepSeek Harness 自恢复系统：一个 **纯 Node、零运行时依赖** 的 CLI + 进程内 watchdog bundle，用于在 DSH 的配置、插件、预设、会话或升级损坏时，按「诊断 → 快照 → 回滚 → 安全模式 → 启动验证」的阶梯恢复到可用状态。
 
-## 命令
+## Current status
+
+- **P0**：CLI recovery flow — 已实现
+- **P1**：launcher 与自动恢复阶梯 — 已实现
+- **P2**：进程内 watchdog bundle — 已实现
+- **P3**：修复模式胶囊 / DSH 本体回退 / 会话修复 — 待实现
+
+## Commands
 
 | 命令 | 作用 |
 |---|---|
-| `scan` | 五道加载关卡 + F1/F5 诊断（profile 组合层、settings/storages、用户预设、技能、会话 zstd/seq） |
-| `snapshot` | 三层快照：Tier A 组合层（profile 5+1、脱敏 settings、storages、预设组合内容）+ Tier B 用户资产（.agent-presets/、skills）+ Tier C（`--data`，sessions） |
-| `rollback` | 恢复到 `--latest` / `--good` / `--id <id>`；自动 pre-rollback 快照；`--install` 跑 `pnpm install --frozen-lockfile`；事后 scan + `dsh --dump-config` 双重验证门 |
-| `safemode enter|exit` | 维护 `profiles/safemode` 白名单 profile（核心 bundles + 空 patch），enter 前自动快照 |
-| `boot-probe` | 在**一次性临时 DSH_HOME 副本**里跑官方 `--dump-config` 静态门 + 可选 `--live` 真实启动 + HTTP 200 门（不写真实 home；live 阶段带 `--no-open`，并清掉调用方的 DSH_WEB_URL/DSH_SESSION_* 等会话环境变量，绝不弹浏览器、绝不触碰真实会话句柄） |
-| `doctor` | scan + 状态 + 快照清单 + 按错误码给修复建议；`--json` 机器可读 |
-| `list` | 快照清单 |
+| `scan` | 扫描 profile、settings、storages、用户预设、会话等常见损坏点 |
+| `snapshot` | 创建恢复快照；支持组合层、用户资产、可选数据层 |
+| `rollback` | 回滚到 `--latest` / `--good` / `--id <id>` |
+| `safemode enter|exit` | 进入/退出安全模式 profile |
+| `boot-probe` | 在临时 DSH_HOME 中做静态 + 真实启动验证 |
+| `doctor` | 聚合 scan、状态、快照清单和修复建议 |
+| `list` | 列出快照 |
+| `launch` | 启动包装器：透明转发 + boot 标记 + 自动恢复阶梯 |
+| `quarantine` | 隔离行管理 |
+| `unquarantine` | 恢复被隔离的行 |
+| `guard` | 安全 profile 守卫 |
 
-常用参数：`--home <dir>`（默认 `$DSH_HOME`/`~/.dsh`）、`--profile web`、
-`--dsh <dir>`（默认 `$DSH_RECOVERY_DSH_DIR` → npx 缓存里版本最高的安装）、`--json`。
-退出码：0 通过；1 有错误/探针失败；2 用法错误。
+常用参数：
 
-## 运行
+- `--home <dir>`：默认 `$DSH_HOME` / `~/.dsh`
+- `--profile web`：默认 profile
+- `--dsh <dir>`：默认 `$DSH_RECOVERY_DSH_DIR`
+- `--json`：输出机器可读结果
+
+退出码：
+
+- `0`：通过
+- `1`：有错误 / 探针失败
+- `2`：用法错误
+
+## Run
 
 ```sh
 node bin/dsh-recovery.mjs scan --json
@@ -28,94 +46,106 @@ node bin/dsh-recovery.mjs snapshot --reason before-upgrade
 node bin/dsh-recovery.mjs boot-probe --live --mark-good
 node bin/dsh-recovery.mjs rollback --good
 DSH_HOME=~/.dsh node bin/dsh-recovery.mjs safemode enter
+node bin/dsh-recovery.mjs launch --profile web -- --port 3080
 ```
 
-无 pnpm 时 `--install` 会给出明确告警；可用 `--pnpm <bin>` 或 `DSH_RECOVERY_PNPM` 指定。
+如果没有 pnpm，`--install` 会给出明确告警；可用 `--pnpm <bin>` 或 `DSH_RECOVERY_PNPM` 指定。
 
-## 安全约定
+## Safety model
 
-- 快照正文**永不**包含密钥：`settings.yaml` 默认只存脱敏结构（secret 键 → `***`）+
-  原文 sha256；`.credentials.yaml` 只存指纹，内容从不复制。`--include-settings` 才存
-  settings 原文（0600），回滚仅从 verbatim 快照还原 settings，脱敏快照永不覆盖现网密钥。
-- 回滚前自动 pre-rollback 快照，回滚本身可逆；Tier B/C 回滚是 overlay（不删快照后新增的文件）。
-- `boot-probe` 只读写 `$TMPDIR` 下的临时 home，真实 home 零写入；live 子进程显式传 `--no-open` 且剥离会话环境变量，不会弹默认浏览器，也不读取真实会话句柄。
-- 快照清单（manifest）记录 DSH 版本与每个文件 sha256，便于升级归因。
+- 快照正文 **永不** 包含密钥：
+  - `settings.yaml` 默认只存脱敏结构（secret 键 → `***`）+ 原文 sha256
+  - `.credentials.yaml` 只存指纹，不复制内容
+  - `--include-settings` 才会保存 settings 原文
+- 回滚前会自动创建 pre-rollback 快照，回滚本身可逆
+- `boot-probe` 只读写 `$TMPDIR` 下的临时 home，真实 home 零写入
+- `boot-probe` 的 live 阶段显式传 `--no-open`，不会弹默认浏览器
+- 快照清单（manifest）记录 DSH 版本与文件 sha256，便于升级归因
+- 所有诊断与事故记录尽量先过脱敏
 
-## 已知 P0 边界（对应设计文档的后续阶段）
-
-- 渲染级白屏探针（浏览器端）→ P2；P0 的 live 门只验证 HTTP 200。
-- 坏预设的「自动回退 default=standard」→ P2 watchdog；P0 通过 Tier B 回滚恢复预设。
-- DSH 本体版本回退 → P3；P0 只记录版本指纹并给出建议。
-- 会话修复只做诊断（zstd 全量解码 + seq 连续性），确定性重写 → P3。
-- 快照恢复的 pnpm 精确重装需要本机 pnpm（发现链：`--pnpm` → `DSH_RECOVERY_PNPM` → PATH）。
-- YAML 子集解析器只用于诊断，永不回写 YAML（写操作全部走整文件快照恢复/模板，避免破坏
-  `!!js` 表达式与注释）。
-
-## 测试
+## P1 launcher and recovery ladder
 
 ```sh
-npm test        # node --test；全部在 $TMPDIR 的隔离 DSH_HOME 副本上运行，不碰真实 ~/.dsh
-```
-
-25 项：YAML 子集解析器单测、11 种损坏检测、快照三层/脱敏、回滚字节级还原与验证门、
-safemode 进出、boot-probe 静态门 + 真实 HTTP-200 门、doctor 聚合。真实验收步骤见
-`docs/ACCEPTANCE.md`。
-
-已在 `@deepseek-ai/dsh@0.1.1-rc.2`、Node 24 上验证；zstd 会话解码需要 Node ≥22.15
-（DSH 自身的 Node 要求范围内）。
-
-## P1：launcher 与自动恢复阶梯
-
-```sh
-# 替代直接 dsh 启动：透传 + boot 标记 + 启动失败自动「隔离 → 回滚 → 安全模式」
+# 替代直接 dsh 启动：透传 + boot 标记 + 启动失败自动恢复
 node bin/dsh-recovery.mjs launch --profile web -- --port 3080
 
 # 隔离行管理与一键恢复
 node bin/dsh-recovery.mjs quarantine list
 node bin/dsh-recovery.mjs unquarantine --id <row-id>
 
-# 安全 profile 守卫（启动强制还原 + fs.watch/轮询防漂移）
+# 安全 profile 守卫
 node bin/dsh-recovery.mjs guard --once
 node bin/dsh-recovery.mjs guard --poll-ms 30000
 ```
 
-阶梯语义（全部留痕于 `recovery/journal.log` 与 `recovery/incidents/`）：
-1. 崩溃证据：boot 标记正常退出即清除，异常退出留作下次启动的崩溃证据；
-2. 归因隔离：`failed to apply loader entry <id> (<pkg>)` 且非 `@deepseek-ai/*` →
-   写带标记的 `disabled` 行并重启（`unquarantine` 一键撤销）；
-3. 回滚：无法归因/核心行失败 → `rollback --good` 再试；
-4. 熔断：窗口内失败 ≥3 次 → 自动 `safemode enter`（默认顺带拉起
-   `dsh --profile safemode --port 3081`）。
+启动阶梯会记录到 `recovery/journal.log` 和 `recovery/incidents/`：
 
-阈值在 `recovery/config.json` 的 `boot.*` / `guard.*`，全部可覆盖（`launch` 也接受
-`--retries/--ready-ms/--threshold/--window-ms/--no-ladder/--no-auto-safe-boot`）。
+1. 崩溃证据：boot 标记正常退出即清除，异常退出保留作为下次启动证据
+2. 归因隔离：非核心第三方行失败时，写入带标记的 `disabled` 行并重启
+3. 回滚：无法归因或核心行失败时，回滚到 `--good` 快照
+4. 熔断：窗口内失败达到阈值后自动进入 `safemode`
 
-## P2：进程内 watchdog bundle（`packages/dsh-recovery-watchdog`）
+阈值位于 `recovery/config.json` 的 `boot.*` / `guard.*`，可覆盖。`launch` 也接受：
 
-一个可安装的 dsh bundle（`dsh.bundle` + `dsh.client`）：
+- `--retries`
+- `--ready-ms`
+- `--threshold`
+- `--window-ms`
+- `--no-ladder`
+- `--no-auto-safe-boot`
+
+## P2 in-process watchdog bundle
+
+`packages/dsh-recovery-watchdog` 是一个可安装的 dsh bundle：
 
 ```sh
 dsh plugin --profile web add link:/abs/path/dsh-recovery/packages/dsh-recovery-watchdog
 ```
 
-- **fiber 失败 → 隔离**：监听 `internal/status`（global），第三方行 FAILED →
-  写带标记的 `disabled` 行并直接经 loader API 推给 root include，运行期卸载、
-  进程不重启；`unquarantine` 恢复。
-- **心跳 / boot 标记**：不经 launcher 的裸 `dsh web` 也由插件补写与清理。
-- **pre-install 快照**：`tools.guard` 同步拦截 `dsh plugin add/remove/update`，
-  执行前落 Tier A+B 快照（脱敏）。
-- **意图对账**：启动即把「已装但漏写 bundles 层」的 bundle 型依赖补回 layer；
-  `plugins.intent.json` 漂移只报告、不自动安装。
-- **坏预设隔离**：broken 的自建预设整目录移入 `recovery/quarantine/presets/`，
-  `agent-presets.default` 行级回退 `standard`（settings 先备份）。
-- **运行时预设复核**：`agentPresets.standingKeyFor` 按轮转逐个复核用户预设
-  （每个周期一个，结果按文件戳缓存，默认 TTL 5 分钟），抓静态查不出的
-  挂载级损坏（包解析失败 / realm 违规 / inject 缺失 / apply 抛错）→ 同样隔离 +
-  默认回退；`status.presetVerification` 暴露缓存视图。
-- **渲染探针**：页面 3s 上报 ok、window error/unhandledrejection 上报失败，
-  落入 `state.json.clientRender` + incident；loopback-only 路由
-  `GET /api/dsh-recovery/status`、`POST /api/dsh-recovery/report-render`。
-- **设置页状态卡**：`settings.section` 注册 `dsh-recovery` 页，展示恢复状态。
+它负责：
 
-宿主半区只消费服务、不发布服务（plane 合规）；全部状态走 `~/.dsh/recovery/`
-单一状态层。完整验收剧本见 `docs/ACCEPTANCE.md` 的 P2 章节。
+- fiber 失败后自动隔离非核心行
+- 写入 / 清理 boot marker 和 heartbeat
+- 在插件安装前自动落 Tier A+B 快照
+- 对已安装但未写入 bundles layer 的依赖做意图对账
+- 自动隔离损坏的用户预设，并把默认预设回退到 `standard`
+- 运行时复核用户预设挂载健康状态
+- 提供 loopback-only 的状态与 render report 路由
+- 在设置页注册恢复状态卡
+
+## Tests
+
+```sh
+npm test        # node --test；全部在隔离的 DSH_HOME 副本上运行，不碰真实 ~/.dsh
+```
+
+目前测试覆盖：
+
+- YAML 子集解析器单测
+- 损坏检测
+- 三层快照与脱敏
+- 回滚还原与验证门
+- safemode 进出
+- boot-probe 静态门 + HTTP 200 门
+- doctor 聚合
+- P2 watchdog 的 unit / E2E 路径
+
+## Notes
+
+- 已在 `@deepseek-ai/dsh@0.1.1-rc.2`、Node 24 上验证
+- zstd 会话解码需要 Node ≥ 22.15
+- `boot-probe` 和 `launch` 的行为依赖可用的 DSH 安装
+- 真实验收步骤见 `docs/ACCEPTANCE.md`
+
+## Roadmap
+
+### P3
+- 修复模式胶囊
+- DSH 本体回退
+- 会话修复
+
+## Project docs
+
+- `docs/dsh-recovery-design.md`
+- `docs/dsh-recovery-research.md`
+- `docs/ACCEPTANCE.md`
