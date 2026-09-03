@@ -230,3 +230,125 @@ test('P2 E2E: unreconciled dependency joins the layer at boot; broken preset qua
     child = null
   } finally { if (child) { try { child.kill('SIGKILL') } catch {} }; clean(home) }
 })
+
+// ── P2 runtime preset verification (standingKeyFor) ────────────────────────
+import { addMountBrokenPreset, addRealmViolationPreset, writeWatchdogConfig } from '../support/fixtures.mjs'
+
+test('P2 E2E: runtime standingKeyFor verification catches mount-level preset damage and quarantines', async (t) => {
+  if (!HAS_DSH) return t.skip('no dsh installation available')
+  const home = makeHome()
+  let child = null
+  try {
+    addMountBrokenPreset(home)     // package resolution failure — static-clean
+    addRealmViolationPreset(home)  // realm violation — static-clean
+    const before = readFileSync(join(home, 'settings.yaml'), 'utf8')
+    writeWatchdogConfig(home, { presetCheckMs: 200, presetVerifyCacheMs: 60000 })
+    const booted = await bootWithPlugin(home)
+    child = booted.child
+    const { port } = booted
+    assert.equal(booted.ok, true)
+
+    const deadline = Date.now() + 30000
+    let status = null
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 300))
+      try {
+        status = await (await fetch('http://127.0.0.1:' + port + '/api/dsh-recovery/status')).json()
+      } catch { continue }
+      const cache = status.presetVerification?.cache ?? []
+      const ghost = cache.find((v) => v.id === 'ghost-preset')
+      const leaky = cache.find((v) => v.id === 'leaky-preset')
+      if (ghost?.ok === false && ghost?.quarantined === true && leaky?.ok === false && leaky?.quarantined === true) break
+    }
+    assert.ok(status, 'status route must answer')
+    const cache = status.presetVerification?.cache ?? []
+    const ghost = cache.find((v) => v.id === 'ghost-preset')
+    const leaky = cache.find((v) => v.id === 'leaky-preset')
+    assert.ok(ghost?.ok === false && ghost?.quarantined === true, 'ghost-preset must be quarantined: ' + JSON.stringify(ghost))
+    assert.ok(leaky?.ok === false && leaky?.quarantined === true, 'leaky-preset must be quarantined: ' + JSON.stringify(leaky))
+
+    // both directories moved to the quarantine root
+    assert.ok(!existsSync(join(home, '.agent-presets', 'ghost-preset')))
+    assert.ok(!existsSync(join(home, '.agent-presets', 'leaky-preset')))
+    assert.ok(existsSync(join(home, 'recovery', 'quarantine', 'presets', 'ghost-preset')))
+    assert.ok(existsSync(join(home, 'recovery', 'quarantine', 'presets', 'leaky-preset')))
+    // incidents + journal carry the mount-level reason
+    const journal = readFileSync(join(home, 'recovery', 'journal.log'), 'utf8')
+    assert.ok(journal.includes('preset-mount-quarantine'), journal.slice(-1000))
+    assert.ok(journal.includes('ghost-preset') && journal.includes('leaky-preset'))
+    // healthy user preset verified ok and left in place; default untouched
+    const status2 = await (await fetch('http://127.0.0.1:' + port + '/api/dsh-recovery/status')).json()
+    const healthy = (status2.presetVerification?.cache ?? []).find((v) => v.id === 'fixture-preset')
+    assert.ok(healthy?.ok === true, 'fixture-preset must verify ok: ' + JSON.stringify(healthy))
+    assert.ok(existsSync(join(home, '.agent-presets', 'fixture-preset')))
+    assert.equal(readFileSync(join(home, 'settings.yaml'), 'utf8'), before, 'settings default must be untouched while the default preset is healthy')
+    // roster shrinks once the broken presets are gone (next discovery refresh)
+    const shrinkDeadline = Date.now() + 10000
+    let shrunk = false
+    while (Date.now() < shrinkDeadline) {
+      await new Promise((r) => setTimeout(r, 300))
+      try {
+        const s = await (await fetch('http://127.0.0.1:' + port + '/api/dsh-recovery/status')).json()
+        if ((s.presetVerification?.total ?? 99) <= 1) { shrunk = true; break }
+      } catch {}
+    }
+    assert.ok(shrunk, 'roster must drop quarantined presets once discovery refreshes: ' + JSON.stringify(status2.presetVerification))
+  } finally {
+    if (child) { try { child.kill('SIGKILL') } catch {} }
+    clean(home)
+  }
+})
+
+test('P2 E2E: preset verification cache is stamp-keyed — edits re-verify, idle passes do not', async (t) => {
+  if (!HAS_DSH) return t.skip('no dsh installation available')
+  const home = makeHome()
+  let child = null
+  try {
+    writeWatchdogConfig(home, { presetCheckMs: 200, presetVerifyCacheMs: 60000 })
+    const booted = await bootWithPlugin(home)
+    child = booted.child
+    const { port } = booted
+    assert.equal(booted.ok, true)
+
+    // wait for the healthy preset to be verified at least once
+    let entry = null
+    const waitDeadline = Date.now() + 15000
+    while (Date.now() < waitDeadline) {
+      await new Promise((r) => setTimeout(r, 300))
+      try {
+        const status = await (await fetch('http://127.0.0.1:' + port + '/api/dsh-recovery/status')).json()
+        entry = (status.presetVerification?.cache ?? []).find((v) => v.id === 'fixture-preset')
+        if (entry?.ok === true) break
+      } catch {}
+    }
+    assert.ok(entry && entry.ok === true, 'fixture-preset must be runtime-verified: ' + JSON.stringify(entry))
+    const firstAt = entry.at
+
+    // idle ticks within the cache TTL must NOT re-verify (single standing mount)
+    await new Promise((r) => setTimeout(r, 1200))
+    const idleStatus = await (await fetch('http://127.0.0.1:' + port + '/api/dsh-recovery/status')).json()
+    const idleEntry = (idleStatus.presetVerification?.cache ?? []).find((v) => v.id === 'fixture-preset')
+    assert.equal(idleEntry.at, firstAt, 'cached entry must be reused while the stamp is unchanged')
+
+    // touching the composition changes the stamp → the next rotation re-verifies
+    const comp = join(home, '.agent-presets', 'fixture-preset', 'agent.cordis.yml')
+    const text = readFileSync(comp, 'utf8') + '# touched\n'
+    writeFileSync(comp, text)
+    const revertDeadline = Date.now() + 15000
+    let editedEntry = null
+    while (Date.now() < revertDeadline) {
+      await new Promise((r) => setTimeout(r, 300))
+      try {
+        const status = await (await fetch('http://127.0.0.1:' + port + '/api/dsh-recovery/status')).json()
+        editedEntry = (status.presetVerification?.cache ?? []).find((v) => v.id === 'fixture-preset')
+        if (editedEntry && editedEntry.at !== firstAt) break
+      } catch {}
+    }
+    assert.ok(editedEntry && editedEntry.at !== firstAt, 'stamp change must trigger a re-verify: ' + JSON.stringify(editedEntry))
+    assert.equal(editedEntry.ok, true)
+    assert.ok(existsSync(join(home, '.agent-presets', 'fixture-preset')), 'healthy preset must survive the edit')
+  } finally {
+    if (child) { try { child.kill('SIGKILL') } catch {} }
+    clean(home)
+  }
+})

@@ -67,6 +67,7 @@ window.__ModuleLoader__.load({
 				row('last good', status.lastGood ?? 'unset', undefined),
 				row('boot failures', status.bootFailures ?? 0, status.bootFailures > 0 ? '#f59e0b' : undefined),
 				row('quarantined rows', quarantined, undefined),
+				row('presets verified', (status.presetVerification ? status.presetVerification.cache.filter((v) => v.ok).length + '/' + status.presetVerification.total + ' ok' : 'n/a'), undefined),
 				row('client render', status.clientRender ? (status.clientRender.ok ? 'ok' : 'failed: ' + (status.clientRender.error ?? '')) : 'not reported', status.clientRender && !status.clientRender.ok ? '#ef4444' : undefined),
 				row('install guard', status.installSnapshotGuard ? 'armed (Tier A+B snapshots)' : 'off', undefined),
 				row('heartbeat', status.heartbeat ? new Date(status.heartbeat.at).toLocaleTimeString() : 'none', undefined),

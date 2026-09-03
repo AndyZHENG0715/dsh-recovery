@@ -108,6 +108,10 @@ dsh plugin --profile web add link:/abs/path/dsh-recovery/packages/dsh-recovery-p
   `plugins.intent.json` 漂移只报告、不自动安装。
 - **坏预设隔离**：broken 的自建预设整目录移入 `recovery/quarantine/presets/`，
   `agent-presets.default` 行级回退 `standard`（settings 先备份）。
+- **运行时预设复核**：`agentPresets.standingKeyFor` 按轮转逐个复核用户预设
+  （每个周期一个，结果按文件戳缓存，默认 TTL 5 分钟），抓静态查不出的
+  挂载级损坏（包解析失败 / realm 违规 / inject 缺失 / apply 抛错）→ 同样隔离 +
+  默认回退；`status.presetVerification` 暴露缓存视图。
 - **渲染探针**：页面 3s 上报 ok、window error/unhandledrejection 上报失败，
   落入 `state.json.clientRender` + incident；loopback-only 路由
   `GET /api/dsh-recovery/status`、`POST /api/dsh-recovery/report-render`。

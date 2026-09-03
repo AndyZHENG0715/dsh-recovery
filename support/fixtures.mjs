@@ -297,3 +297,29 @@ export const waitHttp = async (port, timeoutMs) => {
   }
   return false
 }
+
+// ── P2 runtime preset verification helpers ─────────────────────────────────
+/** Mount-level broken preset: YAML and JS are fine, but the package name in a
+ * row cannot resolve — static checks pass, standingKeyFor fails. */
+export function addMountBrokenPreset(home) {
+  const dir = join(home, '.agent-presets', 'ghost-preset')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'preset.yml'), 'name: Ghost Preset\ndescription: unresolvable package row\n')
+  writeFileSync(join(dir, 'agent.cordis.yml'), "- id: ghost\n  name: '@deepseek-ai/definitely-not-installed-xyz'\n")
+}
+/** Realm-violating preset: row publishes a service into the root realm — the
+ * mountPreset leakedServices check rejects it. Static checks cannot see it. */
+export function addRealmViolationPreset(home) {
+  const dir = join(home, '.agent-presets', 'leaky-preset')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'preset.yml'), 'name: Leaky Preset\ndescription: leaks a service into the root realm\n')
+  writeFileSync(join(dir, 'agent.cordis.yml'), "- id: leaky\n  name: ./leaky.mjs\n")
+  writeFileSync(join(dir, 'leaky.mjs'), "export const name = 'leaky'\nexport function apply(ctx) { ctx.provide('leakyService', {}) }\n")
+}
+export function writeWatchdogConfig(home, watchdogOverrides) {
+  const dir = join(home, 'recovery')
+  mkdirSync(dir, { recursive: true })
+  const existing = (() => { try { return JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')) } catch { return {} } })()
+  existing.watchdog = { ...(existing.watchdog ?? {}), ...watchdogOverrides }
+  writeFileSync(join(dir, 'config.json'), JSON.stringify(existing, null, 2) + '\n')
+}

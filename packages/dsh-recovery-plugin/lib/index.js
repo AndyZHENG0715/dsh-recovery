@@ -31,7 +31,12 @@ const DEFAULT_CONFIG = {
     reconcileBundles: true,
     installSnapshot: true,
     renderReport: true,
-    fiberQuarantine: true
+    fiberQuarantine: true,
+    // Runtime preset verification (agentPresets.standingKeyFor) is rotated one
+    // preset per tick; this is the per-preset cache TTL while its composition
+    // stamp is unchanged. Costs one real standing mount per verify — never a
+    // full compose of every preset each interval.
+    presetVerifyCacheMs: 5 * 60 * 1000
   }
 }
 
@@ -354,6 +359,33 @@ function setSettingsDefault(home, presetId, fallback) {
     return true
   } catch { return false }
 }
+/** Move one user preset directory into recovery/quarantine/presets and, when
+ * it is the configured agent-presets default, fall the default back to
+ * standard (settings backed up first). Shared by the static check and the
+ * runtime standing-mount verification. */
+function quarantinePresetDir(home, entry, dir, reason) {
+  try {
+    const targetRoot = join(recoveryDir(home), 'quarantine', 'presets')
+    ensureDir(targetRoot)
+    let target = join(targetRoot, entry)
+    if (existsSync(target)) target = join(targetRoot, entry + '-' + Date.now())
+    renameSync(dir, target)
+    recordIncident(home, 'preset-quarantined', { id: entry, reason, target })
+    let fellBack = false
+    try {
+      const settings = parseYaml(readFileSync(join(home, 'settings.yaml'), 'utf8'))
+      if (settings.ok && settings.value?.['agent-presets']?.default === entry) {
+        fellBack = setSettingsDefault(home, entry, 'standard')
+        appendJournal(home, { op: 'preset-default-fallback', id: entry, fallback: 'standard', applied: fellBack })
+      }
+    } catch {}
+    return { id: entry, target, reason, fellBack }
+  } catch (error) {
+    recordIncident(home, 'preset-quarantine-failed', { id: entry, error: String(error?.message ?? error) })
+    return null
+  }
+}
+
 export function quarantineBrokenPresets(home) {
   const presetsDir = join(home, '.agent-presets')
   if (!existsSync(presetsDir)) return []
@@ -365,22 +397,8 @@ export function quarantineBrokenPresets(home) {
     if (stat === null || !stat.isDirectory() || stat.isSymbolicLink()) continue
     const check = checkPresetDir(dir)
     if (!check.broken) continue
-    const targetRoot = join(recoveryDir(home), 'quarantine', 'presets')
-    ensureDir(targetRoot)
-    let target = join(targetRoot, entry)
-    if (existsSync(target)) target = join(targetRoot, entry + '-' + Date.now())
-    try {
-      renameSync(dir, target)
-      quarantined.push({ id: entry, target, reason: check.reason })
-      recordIncident(home, 'preset-quarantined', { id: entry, reason: check.reason, target })
-      const settings = parseYaml(readFileSync(join(home, 'settings.yaml'), 'utf8'))
-      if (settings.ok && settings.value?.['agent-presets']?.default === entry) {
-        const fellBack = setSettingsDefault(home, entry, 'standard')
-        appendJournal(home, { op: 'preset-default-fallback', id: entry, fallback: 'standard', applied: fellBack })
-      }
-    } catch (error) {
-      recordIncident(home, 'preset-quarantine-failed', { id: entry, error: String(error?.message ?? error) })
-    }
+    const result = quarantinePresetDir(home, entry, dir, check.reason)
+    if (result !== null) quarantined.push(result)
   }
   return quarantined
 }
@@ -402,6 +420,11 @@ class Watchdog {
     this.lastReconcile = { added: [] }
     this.clientRender = null
     this.timers = []
+    // runtime preset verification state (standingKeyFor, rotated one per tick)
+    this.presetRoster = new Map()   // id -> { path, stamp }
+    this.presetQueue = []           // ids pending (re)verification
+    this.presetCache = new Map()    // id -> { ok, at, stamp, error, quarantined }
+    this.presetVerifyBusy = false
   }
   journal(entry) { appendJournal(this.home, entry) }
   heartbeat() {
@@ -475,6 +498,15 @@ class Watchdog {
         quarantineEvents: this.lastQuarantined.slice(-5),
         reconcile: this.lastReconcile,
         clientRender: this.clientRender,
+        presetVerification: {
+          total: this.presetRoster.size,
+          queue: this.presetQueue.length,
+          checked: this.presetCache.size,
+          cache: [...this.presetCache.entries()].map(([id, v]) => ({
+            id, ok: v.ok, at: v.at, quarantined: v.quarantined === true,
+            error: v.ok ? undefined : String(v.error ?? '').slice(0, 200)
+          })).slice(-20)
+        },
         heartbeat: readJson(this.heartbeatPath),
         config: this.cfg,
         installSnapshotGuard: this.cfg.installSnapshot === true,
@@ -515,6 +547,88 @@ class Watchdog {
       }
     }))
     return disposers
+  }
+  // preset.path from the roster is the COMPOSITION FILE (agent.cordis.yml);
+  // the preset directory is its parent.
+  stampOf(presetPath) {
+    try {
+      const comp = statSync(presetPath)
+      const metaFile = join(dirname(presetPath), 'preset.yml')
+      let meta = { mtimeMs: 0, size: 0 }
+      try { meta = statSync(metaFile) } catch {}
+      return [comp.mtimeMs, comp.size, meta.mtimeMs, meta.size].join(':')
+    } catch { return null }
+  }
+  async refreshPresetRoster() {
+    try {
+      const presets = await this.ctx.agentPresets.list()
+      const userRoot = join(this.home, '.agent-presets')
+      for (const preset of presets) {
+        const id = preset?.id
+        const path = preset?.path
+        if (typeof id !== 'string' || typeof path !== 'string') continue
+        // only USER-trusted presets: standing-verifying shipped presets would
+        // force-compose standard/code/minimal/cordis standing trees for nothing
+        const underUserRoot = path.startsWith(userRoot)
+        const isUserTrusted = preset?.trust === 'user'
+        if (!underUserRoot && !isUserTrusted) continue
+        if (!existsSync(path)) continue
+        this.presetRoster.set(id, { path, dir: dirname(path), stamp: this.stampOf(path) })
+      }
+      for (const id of [...this.presetRoster.keys()]) {
+        if (!presets.some((item) => item.id === id)) this.presetRoster.delete(id)
+      }
+      for (const id of this.presetRoster.keys()) {
+        if (!this.presetQueue.includes(id)) this.presetQueue.push(id)
+      }
+    } catch {}
+  }
+  async verifyOnePreset() {
+    if (this.presetVerifyBusy) return
+    this.presetVerifyBusy = true
+    try {
+      this.presetQueue = this.presetQueue.filter((id) => this.presetRoster.has(id))
+      if (this.presetQueue.length === 0) return
+      const id = this.presetQueue.shift()
+      const roster = this.presetRoster.get(id)
+      if (roster === undefined) return
+      const stamp = this.stampOf(roster.path)
+      const cached = this.presetCache.get(id)
+      if (cached !== undefined && cached.stamp === stamp && (Date.now() - new Date(cached.at).getTime() < this.cfg.presetVerifyCacheMs)) return
+      if (cached !== undefined && cached.ok === false && cached.error === 'quarantined') return
+      let key
+      let error = null
+      try {
+        key = await this.ctx.agentPresets.standingKeyFor(id)
+      } catch (mountError) {
+        error = String(mountError?.message ?? mountError).slice(0, 400)
+      }
+      const ok = key !== undefined && key !== null && error === null
+      const entry = { ok, at: nowIso(), stamp, error: error ?? null }
+      if (ok) {
+        this.presetCache.set(id, { ...entry, quarantined: false })
+        if (cached !== undefined && cached.ok === false) {
+          appendJournal(this.home, { op: 'preset-verified', id, recovered: true })
+        }
+        return
+      }
+      // mount-level failure (package resolution, realm violation, inject
+      // missing, apply throw): quarantine the user preset + default fallback
+      this.presetCache.set(id, { ...entry, quarantined: true })
+      const dir = roster.dir
+      if (dir !== undefined && existsSync(dir)) {
+        const result = quarantinePresetDir(this.home, id, dir, 'mount-level: ' + error)
+        if (result !== null) {
+          appendJournal(this.home, { op: 'preset-mount-quarantine', id, error, target: result.target, fellBack: result.fellBack })
+        }
+      }
+    } finally {
+      this.presetVerifyBusy = false
+    }
+  }
+  async tickPresetVerification() {
+    await this.refreshPresetRoster()
+    await this.verifyOnePreset()
   }
   start() {
     const ctx = this.ctx
@@ -557,6 +671,10 @@ class Watchdog {
     }
     checkPresets()
     this.interval(checkPresets, this.cfg.presetCheckMs)
+    // runtime preset verification: one standingKeyFor per tick, stamped and
+    // cached (never a full recompose of every preset per interval)
+    this.tickPresetVerification().catch(() => {})
+    this.interval(() => { this.tickPresetVerification().catch(() => {}) }, this.cfg.presetCheckMs)
     // status + render-report routes (web profile only)
     try { ctx.inject(['webServer'], (wsCtx) => { this.routeDisposers = this.registerRoutes(wsCtx.webServer) }) } catch {}
     ctx.effect(() => () => {

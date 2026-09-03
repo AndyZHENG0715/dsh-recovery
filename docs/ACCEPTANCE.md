@@ -184,6 +184,12 @@ ln -s /home/andy/playground/dsh-recovery/packages/dsh-recovery-plugin \
    quarantined rows/client render/heartbeat/guard 状态。
 7. **客户端图**：`GET /plugins/dsh-recovery-plugin/client.js` 返回 200；
    `GET /` 的 boot graph 含 `dsh-recovery-plugin`（页面刷新即装载）。
+8. **运行时预设复核**（新增验收）：制造两个“静态健康、挂载必坏”的用户预设——
+   一个包名不可解析（`ghost-preset`），一个向 root realm 发布服务（`leaky-preset`）；
+   启动后 1~2 个轮转周期（`presetCheckMs: 200`）内，两者被 `standingKeyFor`
+   判失败并隔离，健康预设 `ok:true` 且不动；`status.presetVerification.cache`
+   可见每项 `ok/error/quarantined`；改戳健康预设 → 下一轮自动重验（缓存失效），
+   不做任何改动时不重挂载（`cache.at` 不变）。
 
 ## P2 明确边界
 
